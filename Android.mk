@@ -19,7 +19,7 @@ include $(CLEAR_VARS)
 LOCAL_SRC_FILES := $(call all-java-files-under, src)
 
 # The name of the jar file to create.
-LOCAL_MODULE := littlemock-r2
+LOCAL_MODULE := littlemock
 
 # Build a static jar file.
 include $(BUILD_STATIC_JAVA_LIBRARY)
