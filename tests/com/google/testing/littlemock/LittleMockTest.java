@@ -42,6 +42,7 @@ import static com.google.testing.littlemock.LittleMock.isA;
 import static com.google.testing.littlemock.LittleMock.mock;
 import static com.google.testing.littlemock.LittleMock.never;
 import static com.google.testing.littlemock.LittleMock.reset;
+import static com.google.testing.littlemock.LittleMock.timeout;
 import static com.google.testing.littlemock.LittleMock.times;
 import static com.google.testing.littlemock.LittleMock.verify;
 import static com.google.testing.littlemock.LittleMock.verifyNoMoreInteractions;
@@ -50,16 +51,18 @@ import static com.google.testing.littlemock.LittleMock.verifyZeroInteractions;
 import junit.framework.TestCase;
 
 import java.io.IOException;
-import java.lang.annotation.ElementType;
-import java.lang.annotation.Retention;
-import java.lang.annotation.RetentionPolicy;
-import java.lang.annotation.Target;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
 import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CancellationException;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
 
 /**
  * Unit tests for the LittleMock class.
@@ -67,16 +70,6 @@ import java.util.concurrent.Callable;
  * @author hugohudson@gmail.com (Hugo Hudson)
  */
 public class LittleMockTest extends TestCase {
-  /**
-   * Used in these unit tests to indicate that the method should throw a given type of exception.
-   */
-  @Target({ ElementType.METHOD })
-  @Retention(RetentionPolicy.RUNTIME)
-  public @interface ShouldThrow {
-    public Class<? extends Throwable> value();
-    public String[] messages() default {};
-  }
-
   @Mock private Foo mFoo;
   @Mock private Bar mBar;
   @Mock private BarSubtype mBarSubtype;
@@ -84,36 +77,20 @@ public class LittleMockTest extends TestCase {
   @Captor private ArgumentCaptor<String> mCaptureAnotherString;
   @Captor private ArgumentCaptor<Integer> mCaptureInteger;
   @Captor private ArgumentCaptor<Callback> mCaptureCallback;
+  private ExecutorService mExecutorService;
 
   @Override
   protected void setUp() throws Exception {
     super.setUp();
     LittleMock.initMocks(this);
+    mExecutorService = Executors.newCachedThreadPool();
   }
 
   @Override
-  protected void runTest() throws Throwable {
-    Method method = getClass().getMethod(getName(), (Class[]) null);
-    ShouldThrow shouldThrowAnnotation = method.getAnnotation(ShouldThrow.class);
-    if (shouldThrowAnnotation != null) {
-      try {
-        super.runTest();
-        fail("Should have thrown " + shouldThrowAnnotation.value());
-      } catch (Throwable e) {
-        if (!e.getClass().equals(shouldThrowAnnotation.value())) {
-          fail("Should have thrown " + shouldThrowAnnotation.value() + " but threw " + e);
-        }
-        for (String requiredSubstring : shouldThrowAnnotation.messages()) {
-          if (!e.getMessage().contains(requiredSubstring)) {
-            fail("Error message didn't contain " + requiredSubstring + ", was " + e.getMessage());
-          }
-        }
-        // Good, test passes.
-      }
-    } else {
-      super.runTest();
+    protected void tearDown() throws Exception {
+      mExecutorService.shutdown();
+      super.tearDown();
     }
-  }
 
   /** Simple interface for testing against. */
   public interface Callback {
@@ -186,14 +163,18 @@ public class LittleMockTest extends TestCase {
     assertEquals(null, mFoo.anInterface());
   }
 
-  @ShouldThrow(IllegalArgumentException.class)
   public void testVerify_FailsIfNotDoneOnAProxy() {
-    verify("hello").contains("something");
+    try {
+      verify("hello").contains("something");
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
-  @ShouldThrow(IllegalArgumentException.class)
   public void testVerify_FailsIfNotCreatedByOurMockMethod() {
-    verify(createNotARealMock()).add("something");
+    try {
+      verify(createNotARealMock()).add("something");
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
   public void testVerify_SuccessfulVerification() {
@@ -215,22 +196,28 @@ public class LittleMockTest extends TestCase {
     verify(mFoo).add("something");
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_MeansOnlyOnceSoShouldFailIfCalledTwice() {
     mFoo.add("something");
     mFoo.add("something");
-    verify(mFoo).add("something");
+    try {
+      verify(mFoo).add("something");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_FailedVerification_CalledWithWrongArgument() {
     mFoo.add("something else");
-    verify(mFoo).add("something");
+    try {
+      verify(mFoo).add("something");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_FailedVerification_WasNeverCalled() {
-    verify(mFoo).add("something");
+    try {
+      verify(mFoo).add("something");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testVerify_TimesTwice_Succeeds() {
@@ -239,25 +226,31 @@ public class LittleMockTest extends TestCase {
     verify(mFoo, LittleMock.times(2)).add("jim");
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_TimesTwice_ButThreeTimesFails() {
     mFoo.add("jim");
     mFoo.add("jim");
     mFoo.add("jim");
-    verify(mFoo, LittleMock.times(2)).add("jim");
+    try {
+      verify(mFoo, LittleMock.times(2)).add("jim");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_TimesTwice_ButOnceFails() {
     mFoo.add("jim");
-    verify(mFoo, LittleMock.times(2)).add("jim");
+    try {
+      verify(mFoo, LittleMock.times(2)).add("jim");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_TimesTwice_DifferentStringsFails() {
     mFoo.add("jim");
     mFoo.add("bob");
-    verify(mFoo, LittleMock.times(2)).add("jim");
+    try {
+      verify(mFoo, LittleMock.times(2)).add("jim");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testVerify_TimesTwice_WorksWithAnyString() {
@@ -266,18 +259,22 @@ public class LittleMockTest extends TestCase {
     verify(mFoo, LittleMock.times(2)).add(anyString());
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_TimesTwice_FailsIfJustOnceWithAnyString() {
     mFoo.add("bob");
-    verify(mFoo, LittleMock.times(2)).add(anyString());
+    try {
+      verify(mFoo, LittleMock.times(2)).add(anyString());
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_TimesTwice_FailsIfThreeTimesWithAnyString() {
     mFoo.add("bob");
     mFoo.add("jim");
     mFoo.add("james");
-    verify(mFoo, LittleMock.times(2)).add(anyString());
+    try {
+      verify(mFoo, LittleMock.times(2)).add(anyString());
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testVerify_Never_Succeeds() {
@@ -285,10 +282,12 @@ public class LittleMockTest extends TestCase {
     verify(mFoo, never()).anInt();
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_Never_FailsIfWasCalled() {
     mFoo.add("jim");
-    verify(mFoo, never()).add("jim");
+    try {
+      verify(mFoo, never()).add("jim");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testVerify_Never_PassesIfArgumentsDontMatch() {
@@ -308,9 +307,11 @@ public class LittleMockTest extends TestCase {
     verify(mFoo, atLeastOnce()).add("jim");
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_AtLeastOnce_FailsForNoCalls() {
-    verify(mFoo, atLeastOnce()).add("jim");
+    try {
+      verify(mFoo, atLeastOnce()).add("jim");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testVerify_AtLeastThreeTimes_SuceedsForThreeCalls() {
@@ -329,11 +330,13 @@ public class LittleMockTest extends TestCase {
     verify(mFoo, atLeast(3)).add("jim");
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_AtLeastThreeTimes_FailsForTwoCalls() {
     mFoo.add("jim");
     mFoo.add("jim");
-    verify(mFoo, atLeast(3)).add("jim");
+    try {
+      verify(mFoo, atLeast(3)).add("jim");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testVerify_AtMostThreeTimes_SuceedsForThreeCalls() {
@@ -343,14 +346,16 @@ public class LittleMockTest extends TestCase {
     verify(mFoo, atMost(3)).add("jim");
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_AtMostThreeTimes_FailsForFiveCalls() {
     mFoo.add("jim");
     mFoo.add("jim");
     mFoo.add("jim");
     mFoo.add("jim");
     mFoo.add("jim");
-    verify(mFoo, atMost(3)).add("jim");
+    try {
+      verify(mFoo, atMost(3)).add("jim");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testVerify_AtMostThreeTimes_SucceedsForTwoCalls() {
@@ -377,20 +382,24 @@ public class LittleMockTest extends TestCase {
     verify(mFoo, between(2, 4)).add("jim");
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_BetweenTwoAndFour_FailsForOneCall() {
     mFoo.add("jim");
-    verify(mFoo, between(2, 4)).add("jim");
+    try {
+      verify(mFoo, between(2, 4)).add("jim");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerify_BetweenTwoAndFour_FailsForFiveCalls() {
     mFoo.add("jim");
     mFoo.add("jim");
     mFoo.add("jim");
     mFoo.add("jim");
     mFoo.add("jim");
-    verify(mFoo, LittleMock.between(2, 4)).add("jim");
+    try {
+      verify(mFoo, LittleMock.between(2, 4)).add("jim");
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testDoReturnWhen_SimpleReturn() {
@@ -416,14 +425,18 @@ public class LittleMockTest extends TestCase {
     assertEquals(null, mFoo.get(2));
   }
 
-  @ShouldThrow(IllegalArgumentException.class)
   public void testDoReturnWhen_CalledOnString() {
-    doReturn("first").when("hello").contains("something");
+    try {
+      doReturn("first").when("hello").contains("something");
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
-  @ShouldThrow(IllegalArgumentException.class)
   public void testDoReturnWhen_CalledOnNonMock() {
-    doReturn("first").when(createNotARealMock()).get(0);
+    try {
+      doReturn("first").when(createNotARealMock()).get(0);
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
   public void testDoReturnWhen_CanAlsoBeVerified() {
@@ -469,10 +482,12 @@ public class LittleMockTest extends TestCase {
     assertEquals(null, mFoo.anInterface());
   }
 
-  @ShouldThrow(RuntimeException.class)
   public void testDoThrow_SimpleException() {
     doThrow(new RuntimeException()).when(mFoo).aDouble();
-    mFoo.aDouble();
+    try {
+      mFoo.aDouble();
+      fail();
+    } catch (RuntimeException expected) {}
   }
 
   public void testDoThrow_IfItDoesntMatchItIsntThrown() {
@@ -480,17 +495,17 @@ public class LittleMockTest extends TestCase {
     mFoo.aChar();
   }
 
-  @ShouldThrow(RuntimeException.class)
   public void testDoThrow_KeepsThrowingForever() {
     doThrow(new RuntimeException()).when(mFoo).aDouble();
     try {
       mFoo.aDouble();
-      fail("Should have thrown a RuntimeException");
-    } catch (RuntimeException e) {
-      // Expected.
-    }
+      fail();
+    } catch (RuntimeException expected) {}
     // This second call should also throw a RuntimeException.
-    mFoo.aDouble();
+    try {
+      mFoo.aDouble();
+      fail();
+    } catch (RuntimeException expected) {}
   }
 
   public void testDoNothing() {
@@ -502,21 +517,25 @@ public class LittleMockTest extends TestCase {
     verifyZeroInteractions(mFoo);
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerifyZeroInteractions_FailsIfSomethingHasHappened() {
     mFoo.aBoolean();
-    verifyZeroInteractions(mFoo);
+    try {
+      verifyZeroInteractions(mFoo);
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testVerifyZeroInteractions_HappyWithMultipleArguments() {
     verifyZeroInteractions(mFoo, mBar);
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerifyZeroInteractions_ShouldFailEvenIfOtherInteractionsWereFirstVerified() {
     mFoo.add("test");
     verify(mFoo).add("test");
-    verifyZeroInteractions(mFoo);
+    try {
+      verifyZeroInteractions(mFoo);
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testVerifyEq_Method() {
@@ -534,22 +553,28 @@ public class LittleMockTest extends TestCase {
     verify(mBar).mixedArguments(eq(8), eq("test"));
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerifyEq_MethodFailsIfNotEqual() {
     mFoo.add("bob");
-    verify(mFoo).add(eq("jim"));
+    try {
+      verify(mFoo).add(eq("jim"));
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerifyEq_MethodFailsIfJustOneIsNotEqual() {
     mBar.twoStrings("first", "second");
-    verify(mBar).twoStrings(eq("first"), eq("third"));
+    try {
+      verify(mBar).twoStrings(eq("first"), eq("third"));
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerifyEq_MethodFailsIfSameParamsButInWrongOrder() {
     mBar.twoStrings("first", "second");
-    verify(mBar).twoStrings(eq("second"), eq("first"));
+    try {
+      verify(mBar).twoStrings(eq("second"), eq("first"));
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testCapture_SimpleCapture() {
@@ -622,14 +647,6 @@ public class LittleMockTest extends TestCase {
     assertEquals(newList("whinny", "jessica"), mCaptureAnotherString.getAllValues());
   }
 
-  public static <T> List<T> newList(T... things) {
-    ArrayList<T> list = new ArrayList<T>();
-    for (T thing : things) {
-      list.add(thing);
-    }
-    return list;
-  }
-
   public void testAnyString() {
     doReturn("jim").when(mFoo).lookup(anyString());
     assertEquals("jim", mFoo.lookup("barney"));
@@ -641,10 +658,12 @@ public class LittleMockTest extends TestCase {
     verify(mFoo).takesObject(anyString());
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testAnyString_ObjectValue() {
     mFoo.takesObject(new Object());
-    verify(mFoo).takesObject(anyString());
+    try {
+      verify(mFoo).takesObject(anyString());
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testAnyObject() {
@@ -696,11 +715,13 @@ public class LittleMockTest extends TestCase {
     verifyZeroInteractions(mFoo);
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testReset_VerifyFailsAfterReset() {
     mFoo.aByte();
     reset(mFoo);
-    verify(mFoo).aByte();
+    try {
+      verify(mFoo).aByte();
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testCapture_BothBeforeAndAfter() {
@@ -738,7 +759,6 @@ public class LittleMockTest extends TestCase {
     verify(mFoo).add("yes");
   }
 
-  @ShouldThrow(IOException.class)
   public void testDoAction_CanThrowDeclaredException() throws Exception {
     doAnswer(new Callable<Void>() {
       @Override
@@ -746,10 +766,12 @@ public class LittleMockTest extends TestCase {
         throw new IOException("Problem");
       }
     }).when(mFoo).exceptionThrower();
-    mFoo.exceptionThrower();
+    try {
+      mFoo.exceptionThrower();
+      fail();
+    } catch (IOException expected) {}
   }
 
-  @ShouldThrow(RuntimeException.class)
   public void testDoAction_CanThrowUndelcaredException() {
     doAnswer(new Callable<Void>() {
       @Override
@@ -757,7 +779,10 @@ public class LittleMockTest extends TestCase {
         throw new RuntimeException("Problem");
       }
     }).when(mFoo).aBoolean();
-    mFoo.aBoolean();
+    try {
+      mFoo.aBoolean();
+      fail();
+    } catch (RuntimeException expected) {}
   }
 
   public void testRunThisIsAnAliasForDoAction() {
@@ -796,10 +821,12 @@ public class LittleMockTest extends TestCase {
     verifyNoMoreInteractions(mFoo, mBar);
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerifyNoMoreInteractions_FailsWhenOneActionWasNotVerified() {
     mFoo.aBoolean();
-    verifyNoMoreInteractions(mFoo, mBar);
+    try {
+      verifyNoMoreInteractions(mFoo, mBar);
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testVerifyNoMoreInteractions_SucceedsWhenAllActionsWereVerified() {
@@ -809,13 +836,15 @@ public class LittleMockTest extends TestCase {
     verifyNoMoreInteractions(mFoo);
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testVerifyNoMoreInteractions_FailsWhenMostButNotAllActionsWereVerified() {
     mFoo.get(3);
     mFoo.get(20);
     mFoo.aByte();
     verify(mFoo, atLeastOnce()).get(anyInt());
-    verifyNoMoreInteractions(mFoo);
+    try {
+      verifyNoMoreInteractions(mFoo);
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testVerifyNoMoreInteractions_ShouldIngoreStubbedCalls() {
@@ -824,17 +853,20 @@ public class LittleMockTest extends TestCase {
     verifyNoMoreInteractions(mFoo);
   }
 
-  @ShouldThrow(IllegalArgumentException.class)
   public void testMatchers_WrongNumberOfMatchersOnStubbingCausesError() {
-    doReturn("hi").when(mBar).twoStrings("jim", eq("bob"));
+    try {
+      doReturn("hi").when(mBar).twoStrings("jim", eq("bob"));
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
-  @ShouldThrow(IllegalArgumentException.class)
   public void testMatchers_WrongNumberOfMatchersOnVerifyCausesError() {
-    verify(mBar).twoStrings("jim", eq("bob"));
+    try {
+      verify(mBar).twoStrings("jim", eq("bob"));
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
-  @ShouldThrow(IllegalStateException.class)
   public void testCreateACaptureButDontUseItShouldFailAtNextVerify() {
     // If we create a capture illegally, outside of a method call, like so:
     mCaptureString.capture();
@@ -843,23 +875,29 @@ public class LittleMockTest extends TestCase {
     // call on the mock object.
     // Thus we should check in the verify() method that there are *no matchers* on the static
     // list, as this would indicate a programming error such as the above.
-    verify(mFoo, anyTimes()).aBoolean();
+    try {
+      verify(mFoo, anyTimes()).aBoolean();
+      fail();
+    } catch (IllegalStateException expected) {}
   }
 
-  @ShouldThrow(IllegalStateException.class)
   public void testCreateACaptureButDontUseItShouldFailAtNextVerify_AlsoNoMoreInteractions() {
     // Same result desired as in previous test.
     mCaptureString.capture();
-    verifyNoMoreInteractions(mFoo);
+    try {
+      verifyNoMoreInteractions(mFoo);
+      fail();
+    } catch (IllegalStateException expected) {}
   }
 
-  @ShouldThrow(IllegalStateException.class)
   public void testCreateACaptureButDontUseItShouldFailAtNextVerify_AlsoZeroInteraction() {
     mCaptureString.capture();
-    verifyZeroInteractions(mFoo);
+    try {
+      verifyZeroInteractions(mFoo);
+      fail();
+    } catch (IllegalStateException expected) {}
   }
 
-  @ShouldThrow(IllegalStateException.class)
   public void testCheckStaticVariablesMethod() {
     // To help us avoid programming errors, I'm adding a method that you can call from tear down,
     // which will explode if there is anything still left in your static variables at the end
@@ -867,12 +905,17 @@ public class LittleMockTest extends TestCase {
     // variable (so that the next test won't fail).  It should fail if we create a matcher
     // be it a capture or anything else that is then not consumed.
     anyInt();
-    checkForProgrammingErrorsDuringTearDown();
+    try {
+      checkForProgrammingErrorsDuringTearDown();
+      fail();
+    } catch (IllegalStateException expected) {}
   }
 
-  @ShouldThrow(IllegalArgumentException.class)
   public void testCantPassNullToVerifyCount() {
-    verify(mFoo, null).aBoolean();
+    try {
+      verify(mFoo, null).aBoolean();
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
   public void testInjectionInNestedClasses() throws Exception {
@@ -901,10 +944,12 @@ public class LittleMockTest extends TestCase {
     verify(mFoo).takesObject(isA(String.class));
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testIsA_FailsWithSuperclass() {
     mFoo.takesObject(new Object());
-    verify(mFoo).takesObject(isA(String.class));
+    try {
+      verify(mFoo).takesObject(isA(String.class));
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testIsA_WillAcceptNull() {
@@ -918,49 +963,57 @@ public class LittleMockTest extends TestCase {
     verify(mFoo).takesBar(isA(BarSubtype.class));
   }
 
-  @ShouldThrow(AssertionError.class)
   public void testIsA_MatchSubtypeFailed() {
     mFoo.takesBar(mBar);
-    verify(mFoo).takesBar(isA(BarSubtype.class));
+    try {
+      verify(mFoo).takesBar(isA(BarSubtype.class));
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(value = AssertionError.class,
-      messages = {"cannot verify call to", "boolean java.lang.Object.equals(java.lang.Object)"})
   public void testVerifyEquals_ShouldFail() {
     mFoo.equals(null);
-    verify(mFoo).equals(null);
+    try {
+      verify(mFoo).equals(null);
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(value = AssertionError.class,
-      messages = {"cannot verify call to", "int java.lang.Object.hashCode()"})
   public void testVerifyHashCode_ShouldFail() {
     mFoo.hashCode();
-    verify(mFoo).hashCode();
+    try {
+      verify(mFoo).hashCode();
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(value = AssertionError.class,
-      messages = {"cannot verify call to", "java.lang.String java.lang.Object.toString()"})
   public void testVerifyToString_ShouldFail() {
     mFoo.toString();
-    verify(mFoo).toString();
+    try {
+      verify(mFoo).toString();
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(value = AssertionError.class,
-      messages = {"cannot stub call to", "boolean java.lang.Object.equals(java.lang.Object)"})
   public void testStubEquals_ShouldFail() {
-    doReturn(false).when(mFoo).equals(null);
+    try {
+      doReturn(false).when(mFoo).equals(null);
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(value = AssertionError.class,
-      messages = {"cannot stub call to", "int java.lang.Object.hashCode()"})
   public void testStubHashCode_ShouldFail() {
-    doReturn(0).when(mFoo).hashCode();
+    try {
+      doReturn(0).when(mFoo).hashCode();
+      fail();
+    } catch (AssertionError expected) {}
   }
 
-  @ShouldThrow(value = AssertionError.class,
-      messages = {"cannot stub call to", "java.lang.String java.lang.Object.toString()"})
   public void testStubToString_ShouldFail() {
-    doReturn("party").when(mFoo).toString();
+    try {
+      doReturn("party").when(mFoo).toString();
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testEqualsMethod_DoesntCountAsInteraction() {
@@ -1014,7 +1067,7 @@ public class LittleMockTest extends TestCase {
           + "  mFoo.aBoolean()\n"
           + "  at " + singleLineStackTrace(verifyLineNumber) + "\n"
           + "\n"
-          + "No method calls happened to this mock\n";
+          + "No method calls happened on this mock\n";
       assertEquals(expectedMessage, e.getMessage());
     }
   }
@@ -1100,23 +1153,29 @@ public class LittleMockTest extends TestCase {
     }
   }
 
-  @ShouldThrow(IllegalArgumentException.class)
   public void testDoReturn_ThisShouldFailSinceDoubleIsNotAString() {
-    doReturn("hello").when(mFoo).aDouble();
+    try {
+      doReturn("hello").when(mFoo).aDouble();
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
   public void testDoReturn_ThisShouldPassSinceStringCanBeReturnedFromObjectMethod() {
     doReturn("hello").when(mFoo).anObject();
   }
 
-  @ShouldThrow(IllegalArgumentException.class)
   public void testDoReturn_ThisShouldFailSinceObjectCantBeReturnedFromString() {
-    doReturn(new Object()).when(mFoo).aString();
+    try {
+      doReturn(new Object()).when(mFoo).aString();
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
-  @ShouldThrow(IllegalArgumentException.class)
   public void testDoReturn_ThisShouldFailSinceBarIsNotSubtypeOfBarSubtype() {
-    doReturn(mBar).when(mFoo).aBarSubtype();
+    try {
+      doReturn(mBar).when(mFoo).aBarSubtype();
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
   public void testDoReturn_ThisShouldPassSinceBarSubTypeIsABar() {
@@ -1132,10 +1191,12 @@ public class LittleMockTest extends TestCase {
   // TODO(hugohudson): 7. Should fix this.
   // Once we fix the previous test we won't need this one.
   // I'm just demonstrating that currently this fails with NPE at use-time not at stub-time.
-  @ShouldThrow(NullPointerException.class)
   public void testDoReturn_ThisShouldFailBecauseNullIsNotAByte2() {
     doReturn(null).when(mFoo).aByte();
-    mFoo.aByte();
+    try {
+      mFoo.aByte();
+      fail();
+    } catch (NullPointerException expected) {}
   }
 
   public void testDoReturn_ThisShouldPassSinceNullIsAnObject() {
@@ -1155,30 +1216,36 @@ public class LittleMockTest extends TestCase {
   // TODO(hugohudson): 7. Should fix this to give proper message.
   // We could at least give a good message saying why you get failure - saying that your string
   // is not a byte, and pointing to where you stubbed it.
-  @ShouldThrow(ClassCastException.class)
   public void testDoAnswer_ThisShouldFailSinceStringIsNotAByte2() {
     doAnswer(new Callable<String>() {
       @Override public String call() throws Exception { return "hi"; }
     }).when(mFoo).aByte();
-    mFoo.aByte();
+    try {
+      mFoo.aByte();
+      fail();
+    } catch (ClassCastException expected) {}
   }
 
-  @ShouldThrow(value = IllegalArgumentException.class,
-      messages = { "  (Bar) mFoo.aBar()" })
   public void testDoAnswer_ShouldHaveSimpleNameOnReturnValue() {
-    doReturn("hi").when(mFoo).aBar();
+    try {
+      doReturn("hi").when(mFoo).aBar();
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
-  @ShouldThrow(IllegalArgumentException.class)
   public void testCantCreateMockOfNullType() {
-    mock(null);
+    try {
+      mock(null);
+      fail();
+    } catch (IllegalArgumentException expected) {}
   }
 
-  @ShouldThrow(value = AssertionError.class,
-      messages = { "Expected exactly 1 call to:", "onClickListener.onClick(Bar)" })
   public void testCreateMockWithNullFieldName() {
     OnClickListener mockClickListener = mock(OnClickListener.class);
-    verify(mockClickListener).onClick(null);
+    try {
+      verify(mockClickListener).onClick(null);
+      fail();
+    } catch (AssertionError expected) {}
   }
 
   public void testDoubleVerifyNoProblems() {
@@ -1191,10 +1258,185 @@ public class LittleMockTest extends TestCase {
     verify(mFoo).aByte();
   }
 
-  // TODO(hugohudson): 5. Every @ShouldThrow method should be improved by adding test for the
-  // content of the error message.  First augment the annotation to take a String which must
-  // form a substring of the getMessage() for the Exception, then check that the exceptions
-  // thrown are as informative as possible.
+  public void testUnfinishedVerifyCaughtInTearDown_Issue5() {
+    verify(mFoo);
+    try {
+      checkForProgrammingErrorsDuringTearDown();
+      fail();
+    } catch (IllegalStateException expected) {}
+  }
+
+  public void testUnfinishedWhenCaughtInTearDown_Issue5() {
+    doThrow(new RuntimeException()).when(mFoo);
+    try {
+      checkForProgrammingErrorsDuringTearDown();
+      fail();
+    } catch (IllegalStateException expected) {}
+  }
+
+  public void testUnfinishedVerifyCaughtByStartingWhen_Issue5() {
+    verify(mFoo, never());
+    try {
+      doReturn(null).when(mFoo).clear();
+      fail();
+    } catch (IllegalStateException expected) {}
+  }
+
+  public void testUnfinishedWhenCaughtByStartingVerify_Issue5() {
+    doThrow(new RuntimeException()).when(mFoo);
+    try {
+      verify(mFoo).clear();
+      fail();
+    } catch (IllegalStateException expected) {}
+  }
+
+  public void testSecondUnfinishedVerifyShouldFailImmediately() throws Exception {
+    verify(mFoo);
+    try {
+      verify(mFoo);
+      fail();
+    } catch (IllegalStateException expected) {}
+  }
+
+  public void testSecondUnfinishedWhenShouldFailImmediately() throws Exception {
+    doReturn(null).when(mFoo);
+    try {
+      doReturn(null).when(mFoo);
+      fail();
+    } catch (IllegalStateException expected) {}
+  }
+
+  public void testVerifyWithTimeout_SuccessCase() throws Exception {
+    CountDownLatch countDownLatch = new CountDownLatch(1);
+    invokeBarMethodAfterLatchAwait(countDownLatch);
+    doReturn(null).when(mFoo).aBar();
+    verify(mFoo, never()).aBar();
+    countDownLatch.countDown();
+    verify(mFoo, timeout(100)).aBar();
+  }
+
+  public void testVerifyWithTimeout_FailureCase() throws Exception {
+    long start = System.currentTimeMillis();
+    try {
+      verify(mFoo, timeout(10)).aBar();
+      fail();
+    } catch (AssertionError expected) {}
+    long duration = System.currentTimeMillis() - start;
+    assertTrue(duration > 5);
+  }
+
+  public void testVerifyWithTimeoutMultipleInvocations_SuccessCase() throws Exception {
+    CountDownLatch countDownLatch = new CountDownLatch(1);
+    invokeBarMethodAfterLatchAwait(countDownLatch);
+    invokeBarMethodAfterLatchAwait(countDownLatch);
+    doReturn(null).when(mFoo).aBar();
+    verify(mFoo, never()).aBar();
+    countDownLatch.countDown();
+    verify(mFoo, timeout(100).times(2)).aBar();
+    verify(mFoo, timeout(100).atLeast(2)).aBar();
+    verify(mFoo, timeout(100).between(2, 4)).aBar();
+    verify(mFoo, timeout(100).atLeastOnce()).aBar();
+  }
+
+  public void testVerifyWithTimeoutMultipleInvocations_FailureCase() throws Exception {
+    long start = System.currentTimeMillis();
+    mFoo.aBar();
+    try {
+      verify(mFoo, timeout(10).between(2, 3)).aBar();
+      fail();
+    } catch (AssertionError expected) {}
+    long duration = System.currentTimeMillis() - start;
+    assertTrue(duration > 5);
+
+  }
+
+  public void testConcurrentModificationExceptions() throws Exception {
+    // This test concurrently stubs, verifies, and uses a mock.
+    // It used to totally reproducibly throw a ConcurrentModificationException.
+    Future<?> task1 = mExecutorService.submit(new Runnable() {
+      @Override
+      public void run() {
+        while (!Thread.currentThread().isInterrupted()) {
+          mFoo.aBar();
+          Thread.yield();
+        }
+      }
+    });
+    Future<?> task2 = mExecutorService.submit(new Runnable() {
+        @Override
+        public void run() {
+          while (!Thread.currentThread().isInterrupted()) {
+            verify(mFoo, anyTimes()).aBar();
+            Thread.yield();
+          }
+        }
+      });
+    Thread.sleep(20);
+    task1.cancel(true);
+    task2.cancel(true);
+    try {
+      task1.get();
+      fail();
+    } catch (CancellationException expected) {}
+    try {
+      task2.get();
+      fail();
+    } catch (CancellationException expected) {}
+  }
+
+  public void testCannotVerifyFromSecondThreadAfterStubbingInFirst() throws Exception {
+    doReturn(null).when(mFoo).aBar();
+    Future<?> submit = mExecutorService.submit(new Runnable() {
+      @Override
+      public void run() {
+        verify(mFoo, anyTimes()).aBar();
+      }
+    });
+    try {
+      submit.get();
+      fail();
+    } catch (ExecutionException expected) {
+      assertTrue(expected.getCause() instanceof IllegalStateException);
+    }
+  }
+
+  public void testCannotStubFromSecondThreadAfterVerifyingInFirst() throws Exception {
+    mExecutorService.submit(new Runnable() {
+      @Override
+      public void run() {
+        verify(mFoo, anyTimes()).aBar();
+      }
+    }).get();
+    try {
+      doReturn(null).when(mFoo).aBar();
+      fail();
+    } catch (IllegalStateException expected) {}
+  }
+
+  public class Jim {
+    public void bob() {
+      fail();
+    }
+  }
+
+  public void testMockingConcreteClasses() throws Exception {
+    Jim mock = mock(Jim.class);
+    mock.bob();
+  }
+
+  private Future<Void> invokeBarMethodAfterLatchAwait(final CountDownLatch countDownLatch) {
+    return mExecutorService.submit(new Callable<Void>() {
+      @Override
+      public Void call() throws Exception {
+        countDownLatch.await();
+        mFoo.aBar();
+        return null;
+      }
+    });
+  }
+
+  // TODO(hugohudson): 5. Every method that throws exceptions could be improved by adding
+  // test for the content of the error message.
 
   // TODO(hugohudson): 5. Add InOrder class, so that we can check that the given methods on
   // the given mocks happen in the right order.  It will be pretty easy to do.  The syntax
@@ -1258,14 +1500,8 @@ public class LittleMockTest extends TestCase {
   //  //then
   //  assertThat(goods, containBread());
 
-  // TODO(hugohudson): 6. How about timeouts that are mentioned in Mockito docs?
-  // Sounds like a good idea.  Would look like this:
-  // verify(mFoo, within(50).milliseconds()).get(0);
-
-  // TODO(hugohudson): 6. Consider bringing back in the async code I wrote for the AndroidMock
-  // framework so that you can expect to wait for the method call.
-  // Although obviously we're more keen on encouraging people to write unit tests that don't
-  // require async behaviour in the first place.
+  // TODO: All unfinished verify and when statements should have sensible error messages telling
+  // you where the unfinished statement comes from.
 
   /** Returns the line number of the line following the method call. */
   private int getNextLineNumber() {
@@ -1306,5 +1542,13 @@ public class LittleMockTest extends TestCase {
       public void callMeNow() {
       }
     };
+  }
+
+  private static <T> List<T> newList(T... things) {
+    ArrayList<T> list = new ArrayList<T>();
+    for (T thing : things) {
+      list.add(thing);
+    }
+    return list;
   }
 }

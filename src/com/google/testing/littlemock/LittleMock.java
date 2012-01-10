@@ -16,6 +16,7 @@
 
 package com.google.testing.littlemock;
 
+import java.io.File;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -23,10 +24,11 @@ import java.lang.reflect.Proxy;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashMap;
-import java.util.LinkedList;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
+import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * Very lightweight and simple mocking framework, inspired by Mockito, http://mockito.org.
@@ -34,9 +36,6 @@ import java.util.concurrent.Callable;
  * <p>It has a number of limitations, including:
  * <ul>
  *   <li>Doesn't support mocking concrete classes, <b>interfaces only</b>.</li>
- *
- *   <li><b>Is not thread-safe.</b> You'll need to provide your own synchronization if you want to
- *   run multi-threaded unit tests.</li>
  *
  *   <li>It supports only a <b>small subset</b> of the APIs provided by Mockito and other mocking
  *   frameworks.</li>
@@ -149,10 +148,20 @@ public class LittleMock {
     if (howManyTimes == null) {
       throw new IllegalArgumentException("Can't pass null for howManyTimes parameter");
     }
+    DefaultInvocationHandler handler = getHandlerFrom(mock);
+    checkState(handler.mHowManyTimes == null, "Unfinished verify() statements");
+    checkState(handler.mStubbingAction == null, "Unfinished stubbing statements");
     checkNoMatchers();
-    getHandlerFrom(mock).mHowManyTimes = howManyTimes;
-    return mock;
+    handler.mHowManyTimes = howManyTimes;
+    sUnfinishedCallCounts.add(howManyTimes);
+    return handler.<T>getVerifyingMock();
   }
+
+  /** The list of outstanding calls to verify() that haven't finished, used to check for errors. */
+  private static List<CallCount> sUnfinishedCallCounts = new ArrayList<CallCount>();
+
+  /** The list of outstanding calls to when() that haven't finished, used to check for errors. */
+  private static List<Action> sUnfinishedStubbingActions = new ArrayList<Action>();
 
   /** Begins a verification step for exactly one method call. */
   public static <T> T verify(T mock) { return verify(mock, times(1)); }
@@ -161,7 +170,7 @@ public class LittleMock {
   public static void verifyZeroInteractions(Object... mocks) {
     checkNoMatchers();
     for (Object mock : mocks) {
-      LinkedList<MethodCall> mMethodCalls = getHandlerFrom(mock).mRecordedCalls;
+      List<MethodCall> mMethodCalls = getHandlerFrom(mock).mRecordedCalls;
       expect(mMethodCalls.isEmpty(), "Mock expected zero interactions, had " + mMethodCalls);
     }
   }
@@ -200,7 +209,12 @@ public class LittleMock {
   /** Creates a {@link CallCount} that matches exactly the given number of calls. */
   public static CallCount times(long n) { return new CallCount(n, n); }
 
-  /** Creates a {@link CallCount} that only matches if the method was never called. */
+  /** Claims that the verified call must happen before the given timeout. */
+  public static Timeout timeout(long timeoutMillis) {
+    return new Timeout(1, 1, timeoutMillis);
+  }
+
+/** Creates a {@link CallCount} that only matches if the method was never called. */
   public static CallCount never() { return new CallCount(0, 0); }
 
   /** Creates a {@link CallCount} that matches at least one method call. */
@@ -362,8 +376,9 @@ public class LittleMock {
   }
 
   /** Creates a mock, more easily done via the {@link #initMocks(Object)} method. */
+  @SuppressWarnings("unchecked")
   private static <T> T mock(Class<T> clazz, String fieldName) {
-    return LittleMock.<T>newProxy(clazz, new DefaultInvocationHandler(clazz, fieldName));
+    return (T) createProxy(clazz, new DefaultInvocationHandler(clazz, fieldName));
   }
 
   /** Pick a suitable name for a field of the given clazz. */
@@ -380,7 +395,19 @@ public class LittleMock {
   }
 
   /** Use this in tear down to check for programming errors. */
-  public static void checkForProgrammingErrorsDuringTearDown() { checkNoMatchers(); }
+  public static void checkForProgrammingErrorsDuringTearDown() {
+    checkNoMatchers();
+    checkNoUnfinishedCalls(sUnfinishedCallCounts, "verify()");
+    checkNoUnfinishedCalls(sUnfinishedStubbingActions, "stubbing");
+  }
+
+  /** Helper function to check that there are no verify or stubbing commands outstanding. */
+  private static void checkNoUnfinishedCalls(List<?> list, String type) {
+    if (!list.isEmpty()) {
+      list.clear();
+      throw new IllegalStateException("Unfinished " + type + " statements");
+    }
+  }
 
   /** Implementation of {@link Behaviour}. */
   private static class BehaviourImpl implements Behaviour {
@@ -392,8 +419,12 @@ public class LittleMock {
 
     @Override
     public <T> T when(T mock) {
-      getHandlerFrom(mock).mStubbingAction = mAction;
-      return mock;
+      DefaultInvocationHandler handler = getHandlerFrom(mock);
+      checkState(handler.mHowManyTimes == null, "Unfinished verify() statements");
+      checkState(handler.mStubbingAction == null, "Unfinished stubbing statements");
+      handler.mStubbingAction = mAction;
+      sUnfinishedStubbingActions.add(mAction);
+      return handler.<T>getStubbingMock();
     }
   }
 
@@ -478,9 +509,10 @@ public class LittleMock {
     private final String mFieldName;
 
     /** The list of method calls executed on the mock. */
-    private LinkedList<MethodCall> mRecordedCalls = new LinkedList<MethodCall>();
+    private List<MethodCall> mRecordedCalls = new CopyOnWriteArrayList<MethodCall>();
     /** The list of method calls that were stubbed out and their corresponding actions. */
-    private LinkedList<StubbedCall> mStubbedCalls = new LinkedList<StubbedCall>();
+    private List<StubbedCall> mStubbedCalls = new CopyOnWriteArrayList<StubbedCall>();
+
     /**
      * The number of times a given call should be verified.
      *
@@ -490,6 +522,7 @@ public class LittleMock {
      * <p>It is reset to null once the verification has occurred.
      */
     private CallCount mHowManyTimes = null;
+
     /**
      * The action to be associated with the stubbed method.
      *
@@ -497,6 +530,12 @@ public class LittleMock {
      * in the stubbing state.
      */
     private Action mStubbingAction = null;
+
+    /** Dynamic proxy used to verify calls against this mock. */
+    private final Object mVerifyingMock;
+
+    /** Dynamic proxy used to stub calls against this mock. */
+    private final Object mStubbingMock;
 
     /**
      * Creates a new invocation handler for an object.
@@ -509,24 +548,84 @@ public class LittleMock {
     public DefaultInvocationHandler(Class<?> clazz, String fieldName) {
       mClazz = clazz;
       mFieldName = fieldName;
+      mVerifyingMock = createVerifyingMock(clazz);
+      mStubbingMock = createStubbingMock(clazz);
+    }
+
+    // Safe if you call getHandlerFrom(mock).getVerifyingMock(), since this is guaranteed to be
+    // of the same type as mock itself.
+    @SuppressWarnings("unchecked")
+    public <T> T getVerifyingMock() {
+      return (T) mVerifyingMock;
+    }
+
+    // Safe if you call getHandlerFrom(mock).getStubbingMock(), since this is guaranteed to be
+    // of the same type as mock itself.
+    @SuppressWarnings("unchecked")
+    public <T> T getStubbingMock() {
+      return (T) mStubbingMock;
+    }
+
+    /** Used to check that we always stub and verify from the same thread. */
+    private AtomicReference<Thread> mCurrentThread = new AtomicReference<Thread>();
+
+    /** Check that we are stubbing and verifying always from the same thread. */
+    private void checkThread() {
+      Thread currentThread = Thread.currentThread();
+      mCurrentThread.compareAndSet(null, currentThread);
+      if (mCurrentThread.get() != currentThread) {
+        throw new IllegalStateException("Must always mock and stub from one thread only.  "
+            + "This thread: " + currentThread + ", the other thread: " + mCurrentThread.get());
+      }
+    }
+
+    /** Generate the dynamic proxy that will handle verify invocations. */
+    private Object createVerifyingMock(Class<?> clazz) {
+      return createProxy(clazz, new InvocationHandler() {
+        @Override
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+          checkThread();
+          expect(mHowManyTimes != null, "verifying mock doesn't know how many times");
+          try {
+            ArgumentMatcher[] matchers = checkClearAndGetMatchers(method);
+            StackTraceElement callSite = new Exception().getStackTrace()[2];
+            MethodCall methodCall = new MethodCall(method, callSite, args);
+            innerVerify(method, matchers, methodCall, proxy, callSite, mHowManyTimes);
+            return defaultReturnValue(method.getReturnType());
+          } finally {
+            sUnfinishedCallCounts.remove(mHowManyTimes);
+            mHowManyTimes = null;
+          }
+        }
+      });
+    }
+
+    /** Generate the dynamic proxy that will handle stubbing invocations. */
+    private Object createStubbingMock(Class<?> clazz) {
+      return createProxy(clazz, new InvocationHandler() {
+        @Override
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+          checkThread();
+          expect(mStubbingAction != null, "stubbing mock doesn't know what action to perform");
+          try {
+            ArgumentMatcher[] matchers = checkClearAndGetMatchers(method);
+            StackTraceElement callSite = new Exception().getStackTrace()[2];
+            MethodCall methodCall = new MethodCall(method, callSite, args);
+            innerStub(method, matchers, methodCall, callSite, mStubbingAction);
+            return defaultReturnValue(method.getReturnType());
+          } finally {
+            sUnfinishedStubbingActions.remove(mStubbingAction);
+            mStubbingAction = null;
+          }
+        }
+      });
     }
 
     @Override
     public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
-      ArgumentMatcher[] matchers = checkClearAndGetMatchers(method);
       StackTraceElement callSite = new Exception().getStackTrace()[2];
       MethodCall methodCall = new MethodCall(method, callSite, args);
-      if (mHowManyTimes != null) {
-        innerVerify(method, matchers, methodCall, proxy, callSite);
-        mHowManyTimes = null;
-        return defaultReturnValue(method.getReturnType());
-      } else if (mStubbingAction != null) {
-        innerStub(method, matchers, methodCall, callSite);
-        mStubbingAction = null;
-        return defaultReturnValue(method.getReturnType());
-      } else {
-        return innerRecord(method, args, methodCall, proxy, callSite);
-      }
+      return innerRecord(method, args, methodCall, proxy, callSite);
     }
 
     /**
@@ -579,13 +678,12 @@ public class LittleMock {
     }
 
     private void innerStub(Method method, final ArgumentMatcher[] matchers, MethodCall methodCall,
-        StackTraceElement callSite) {
-      final Action stubbingAction = mStubbingAction;
+        StackTraceElement callSite, final Action stubbingAction) {
       checkSpecialObjectMethods(method, "stub");
       checkThisActionCanBeUsedForThisMethod(method, stubbingAction, callSite);
       if (matchers.length == 0) {
         // If there are no matchers, then this is a simple stubbed method call with an action.
-        mStubbedCalls.addFirst(new StubbedCall(methodCall, stubbingAction));
+        mStubbedCalls.add(0, new StubbedCall(methodCall, stubbingAction));
         return;
       }
       // If there are matchers, then we need to make a new method call which matches only
@@ -607,7 +705,7 @@ public class LittleMock {
           return stubbingAction.getReturnType();
         }
       };
-      mStubbedCalls.addFirst(new StubbedCall(matchMatchersMethodCall, setCapturesThenAction));
+      mStubbedCalls.add(0, new StubbedCall(matchMatchersMethodCall, setCapturesThenAction));
     }
 
     private void checkThisActionCanBeUsedForThisMethod(Method method, final Action stubbingAction,
@@ -645,8 +743,32 @@ public class LittleMock {
     }
 
     private void innerVerify(Method method, ArgumentMatcher[] matchers, MethodCall methodCall,
-            Object proxy, StackTraceElement callSite) {
+        Object proxy, StackTraceElement callSite, CallCount callCount) {
       checkSpecialObjectMethods(method, "verify");
+      int total = countMatchingInvocations(method, matchers, methodCall);
+      long callTimeout = callCount.getTimeout();
+      if (callTimeout > 0) {
+        long endTime = System.currentTimeMillis() + callTimeout;
+        while (!callCount.matches(total)) {
+          try {
+            Thread.sleep(1);
+          } catch (InterruptedException e) {
+            fail("interrupted whilst waiting to verify");
+          }
+          if (System.currentTimeMillis() > endTime) {
+            fail(formatFailedVerifyMessage(methodCall, total, callTimeout, callCount));
+          }
+          total = countMatchingInvocations(method, matchers, methodCall);
+        }
+      } else {
+        if (!callCount.matches(total)) {
+          fail(formatFailedVerifyMessage(methodCall, total, 0, callCount));
+        }
+      }
+    }
+
+    private int countMatchingInvocations(Method method, ArgumentMatcher[] matchers,
+        MethodCall methodCall) {
       int total = 0;
       for (MethodCall call : mRecordedCalls) {
         if (call.mMethod.equals(method)) {
@@ -658,17 +780,22 @@ public class LittleMock {
           }
         }
       }
-      expect(mHowManyTimes.matches(total), formatFailedVerifyMessage(methodCall, total));
+      return total;
     }
 
-    private String formatFailedVerifyMessage(MethodCall methodCall, int total) {
+    private String formatFailedVerifyMessage(MethodCall methodCall, int total, long timeoutMillis,
+        CallCount callCount) {
       StringBuffer sb = new StringBuffer();
-      sb.append("\nExpected ").append(mHowManyTimes).append(" to:");
+      sb.append("\nExpected ").append(callCount);
+      if (timeoutMillis > 0) {
+        sb.append(" within " + timeoutMillis + "ms");
+      }
+      sb.append(" to:");
       appendDebugStringForMethodCall(sb, methodCall.mMethod,
           methodCall.mElement, mFieldName, false);
       sb.append("\n\n");
       if (mRecordedCalls.size() == 0) {
-        sb.append("No method calls happened to this mock");
+        sb.append("No method calls happened on this mock");
       } else {
         sb.append("Method calls that did happen:");
         for (MethodCall recordedCall : mRecordedCalls) {
@@ -768,10 +895,10 @@ public class LittleMock {
 
   /** Encapsulates the number of times a method is called, between upper and lower bounds. */
   private static class CallCount {
-    long mLowerBound;
-    long mUpperBound;
+    private long mLowerBound;
+    private long mUpperBound;
 
-    private CallCount(long lowerBound, long upperBound) {
+    public CallCount(long lowerBound, long upperBound) {
       mLowerBound = lowerBound;
       mUpperBound = upperBound;
     }
@@ -779,6 +906,21 @@ public class LittleMock {
     /** Tells us if this call count matches a desired count. */
     public boolean matches(long total) {
       return total >= mLowerBound && total <= mUpperBound;
+    }
+
+    /** Tells us how long we should block waiting for the verify to happen. */
+    public long getTimeout() {
+      return 0;
+    }
+
+    public CallCount setLowerBound(long lowerBound) {
+      mLowerBound = lowerBound;
+      return this;
+    }
+
+    public CallCount setUpperBound(long upperBound) {
+      mUpperBound = upperBound;
+      return this;
     }
 
     @Override
@@ -790,6 +932,26 @@ public class LittleMock {
             mUpperBound + plural(" call", mUpperBound);
       }
     }
+  }
+
+  /** Encapsulates adding number of times behaviour to a call count with timeout. */
+  public static final class Timeout extends CallCount {
+    private long mTimeoutMillis;
+
+    public Timeout(long lowerBound, long upperBound, long timeoutMillis) {
+      super(lowerBound, upperBound);
+      mTimeoutMillis = timeoutMillis;
+    }
+
+    @Override
+    public long getTimeout() {
+      return mTimeoutMillis;
+    }
+
+    public CallCount times(int times) { return setLowerBound(times).setUpperBound(times); }
+    public CallCount atLeast(long n) { return setLowerBound(n).setUpperBound(Long.MAX_VALUE); }
+    public CallCount atLeastOnce() { return setLowerBound(1).setUpperBound(Long.MAX_VALUE); }
+    public CallCount between(long n, long m) { return setLowerBound(n).setUpperBound(m); }
   }
 
   /** Helper method to add an 's' to a string iff the count is not 1. */
@@ -861,12 +1023,6 @@ public class LittleMock {
     return (DefaultInvocationHandler) invocationHandler;
   }
 
-  /** Builds a dynamic proxy that implements the given interface, delegating to given handler. */
-  @SuppressWarnings("unchecked")
-  private static <T> T newProxy(Class<?> theInterface, InvocationHandler theHandler) {
-    return (T) Proxy.newProxyInstance(getClassLoader(), new Class<?>[]{ theInterface }, theHandler);
-  }
-
   /** Gets a suitable class loader for use with the proxy. */
   private static ClassLoader getClassLoader() {
     return LittleMock.class.getClassLoader();
@@ -877,5 +1033,33 @@ public class LittleMock {
     field.setAccessible(true);
     field.set(object, value);
     field.setAccessible(false);
+  }
+
+  /** Helper method to throw an IllegalStateException if given condition is not met. */
+  private static void checkState(boolean condition, String message) {
+    if (!condition) {
+      throw new IllegalStateException(message);
+    }
+  }
+
+  /** Create a dynamic proxy for the given class, delegating to the given invocation handler. */
+  private static Object createProxy(Class<?> clazz, InvocationHandler handler) {
+    if (clazz.isInterface()) {
+      return Proxy.newProxyInstance(getClassLoader(), new Class<?>[] { clazz }, handler);
+    }
+    try {
+      Class<?> proxyBuilder = Class.forName("com.google.dexmaker.stock.ProxyBuilder");
+      Method forClassMethod = proxyBuilder.getMethod("forClass", Class.class);
+      Object builder = forClassMethod.invoke(null, clazz);
+      Method handlerMethod = builder.getClass().getMethod("handler", InvocationHandler.class);
+      builder = handlerMethod.invoke(builder, handler);
+      Method dexCacheMethod = builder.getClass().getMethod("dexCache", File.class);
+      File directory = AppDataDirGuesser.getsInstance().guessSuitableDirectoryForGeneratedClasses();
+      builder = dexCacheMethod.invoke(builder, directory);
+      Method buildMethod = builder.getClass().getMethod("build");
+      return buildMethod.invoke(builder);
+    } catch (Exception e) {
+      throw new IllegalStateException("Could not mock this concrete class", e);
+    }
   }
 }
