@@ -33,16 +33,13 @@ import java.util.concurrent.atomic.AtomicReference;
 /**
  * Very lightweight and simple mocking framework, inspired by Mockito, http://mockito.org.
  *
- * <p>It has a number of limitations, including:
- * <ul>
- *   <li>Doesn't support mocking concrete classes, <b>interfaces only</b>.</li>
+ * <p>It supports only a <b>small subset</b> of the APIs provided by Mockito and other mocking
+ * frameworks.
  *
- *   <li>It supports only a <b>small subset</b> of the APIs provided by Mockito and other mocking
- *   frameworks.</li>
- * </ul>
- *
- * <p>This project was designed to be lightweight and suitable for platforms that don't support
- * dynamic class generation, for example Android.
+ * <p>This project was originally designed to be lightweight and suitable for platforms that don't
+ * support dynamic class generation, for example Android.  Since the release of the open
+ * source dexmaker project http://code.google.com/p/dexmaker/ we can now mock concrete classes
+ * too.
  *
  * <p>Here is an example of how to use the framework.
  *
@@ -85,6 +82,8 @@ import java.util.concurrent.atomic.AtomicReference;
  *   desired behaviour.</li>
  *   <li>Which also leads to less fragile tests, where adding another method call on your
  *   dependencies doesn't break unrelated tests.</li>
+ *   <li>Simpler sharing of common setup method with specific tests overridding individual
+ *   behavious however they want to, only the most recent stubbed call is the one that counts.</li>
  *   <li>More natural order for tests: set up stubs, execute tests, verify that it worked.</li>
  *   <li>More unified syntax that doesn't require special case for differences between void method
  *   calls and method calls that return a value.</li>
