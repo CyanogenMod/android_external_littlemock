@@ -1011,18 +1011,6 @@ public class LittleMock {
     return DEFAULT_RETURN_VALUE_LOOKUP.get(returnType);
   }
 
-  /**
-   * If the input object is one of our mocks, returns the {@link DefaultInvocationHandler}
-   * we constructed it with.  Otherwise fails with {@link IllegalArgumentException}.
-   */
-  private static DefaultInvocationHandler getHandlerFrom(Object mock) {
-    InvocationHandler invocationHandler = Proxy.getInvocationHandler(mock);
-    if (!(invocationHandler instanceof DefaultInvocationHandler)) {
-      throw new IllegalArgumentException("not a valid mock: " + mock);
-    }
-    return (DefaultInvocationHandler) invocationHandler;
-  }
-
   /** Gets a suitable class loader for use with the proxy. */
   private static ClassLoader getClassLoader() {
     return LittleMock.class.getClassLoader();
@@ -1040,6 +1028,28 @@ public class LittleMock {
     if (!condition) {
       throw new IllegalStateException(message);
     }
+  }
+
+  /**
+   * If the input object is one of our mocks, returns the {@link DefaultInvocationHandler}
+   * we constructed it with.  Otherwise fails with {@link IllegalArgumentException}.
+   */
+  private static DefaultInvocationHandler getHandlerFrom(Object mock) {
+    try {
+      InvocationHandler invocationHandler = Proxy.getInvocationHandler(mock);
+      if (invocationHandler instanceof DefaultInvocationHandler) {
+        return (DefaultInvocationHandler) invocationHandler;
+      }
+    } catch (IllegalArgumentException expectedIfNotAProxy) {}
+    try {
+      Class<?> proxyBuilder = Class.forName("com.google.dexmaker.stock.ProxyBuilder");
+      Method getHandlerMethod = proxyBuilder.getMethod("getInvocationHandler", Object.class);
+      Object invocationHandler = getHandlerMethod.invoke(proxyBuilder, mock);
+      if (invocationHandler instanceof DefaultInvocationHandler) {
+        return (DefaultInvocationHandler) invocationHandler;
+      }
+    } catch (Exception expectedIfNotAProxyBuilderMock) {}
+    throw new IllegalArgumentException("not a valid mock: " + mock);
   }
 
   /** Create a dynamic proxy for the given class, delegating to the given invocation handler. */

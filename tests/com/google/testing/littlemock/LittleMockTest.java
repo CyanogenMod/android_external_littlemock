@@ -1413,13 +1413,14 @@ public class LittleMockTest extends TestCase {
     } catch (IllegalStateException expected) {}
   }
 
-  public class Jim {
+  public static class Jim {
     public void bob() {
       fail();
     }
   }
 
-  public void testMockingConcreteClasses() throws Exception {
+  // Does not work on JVM, android only.
+  public void suppress_testMockingConcreteClasses() throws Exception {
     Jim mock = mock(Jim.class);
     mock.bob();
   }
