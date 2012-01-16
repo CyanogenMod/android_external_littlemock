@@ -17,6 +17,7 @@
 package com.google.testing.littlemock;
 
 import java.io.File;
+import java.lang.reflect.Field;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -43,7 +44,8 @@ public class AppDataDirGuesser {
       Class<?> clazz = Class.forName("dalvik.system.PathClassLoader");
       clazz.cast(classLoader);
       // Use the toString() method to calculate the data directory.
-      String pathFromThisClassLoader = getPathFromThisClassLoader(classLoader);
+      String pathFromThisClassLoader =
+          getPathFromPathClassLoader(classLoader, clazz);
       File[] results = guessPath(pathFromThisClassLoader);
       if (results.length > 0) {
         return results[0];
@@ -56,7 +58,22 @@ public class AppDataDirGuesser {
     return null;
   }
 
-  private String getPathFromThisClassLoader(ClassLoader classLoader) {
+  private String getPathFromPathClassLoader(
+      ClassLoader classLoader, Class<?> pathClassLoaderClass) {
+    // Prior to ICS, we can simply read the "path" field of the
+    // PathClassLoader.
+    try {
+      Field pathField = pathClassLoaderClass.getDeclaredField("path");
+      pathField.setAccessible(true);
+      return (String) pathField.get(classLoader);
+    } catch (NoSuchFieldException e) {
+      // Ignore and fall back on parsing the output of toString below
+    } catch (IllegalAccessException e) {
+      // Ignore and fall back on parsing the output of toString below
+    } catch (ClassCastException e) {
+      // Ignore and fall back on parsing the output of toString below
+    }
+
     // Parsing toString() method: yuck.  But no other way to get the path.
     // Strip out the bit between angle brackets, that's our path.
     String result = classLoader.toString();
@@ -82,9 +99,15 @@ public class AppDataDirGuesser {
       if (dash != -1) {
         end = dash;
       }
-      File file = new File("/data/data/" + potential.substring(start, end) + "/cache");
-      if (isWriteableDirectory(file)) {
-        results.add(file);
+      String packageName = potential.substring(start, end);
+      File dataDir = new File("/data/data/" + packageName);
+      if (isWriteableDirectory(dataDir)) {
+        File cacheDir = new File(dataDir, "cache");
+        if ((cacheDir.exists()) || (cacheDir.mkdir())) {
+          if (isWriteableDirectory(cacheDir)) {
+            results.add(cacheDir);
+          }
+        }
       }
     }
     return results.toArray(new File[results.size()]);
