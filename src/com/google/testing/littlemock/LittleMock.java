@@ -17,6 +17,8 @@
 package com.google.testing.littlemock;
 
 import java.io.File;
+import java.io.ObjectInputStream;
+import java.io.ObjectStreamClass;
 import java.lang.reflect.Field;
 import java.lang.reflect.InvocationHandler;
 import java.lang.reflect.Method;
@@ -1060,15 +1062,42 @@ public class LittleMock {
       Class<?> proxyBuilder = Class.forName("com.google.dexmaker.stock.ProxyBuilder");
       Method forClassMethod = proxyBuilder.getMethod("forClass", Class.class);
       Object builder = forClassMethod.invoke(null, clazz);
-      Method handlerMethod = builder.getClass().getMethod("handler", InvocationHandler.class);
-      builder = handlerMethod.invoke(builder, handler);
       Method dexCacheMethod = builder.getClass().getMethod("dexCache", File.class);
       File directory = AppDataDirGuesser.getsInstance().guessSuitableDirectoryForGeneratedClasses();
       builder = dexCacheMethod.invoke(builder, directory);
-      Method buildMethod = builder.getClass().getMethod("build");
-      return buildMethod.invoke(builder);
+      Method buildClassMethod = builder.getClass().getMethod("buildProxyClass");
+      Class<?> resultClass = (Class<?>) buildClassMethod.invoke(builder);
+      Object proxy = unsafeCreateInstance(resultClass);
+      Field handlerField = resultClass.getDeclaredField("$__handler");
+      handlerField.setAccessible(true);
+      handlerField.set(proxy, handler);
+      return proxy;
     } catch (Exception e) {
       throw new IllegalStateException("Could not mock this concrete class", e);
     }
+  }
+
+  /** Attempt to construct an instance of the class using hacky methods to avoid calling super. */
+  @SuppressWarnings("unchecked")
+  private static <T> T unsafeCreateInstance(Class<T> clazz) {
+    // try dalvikvm, pre-gingerbread
+    try {
+      final Method newInstance = ObjectInputStream.class.getDeclaredMethod(
+          "newInstance", Class.class, Class.class);
+      newInstance.setAccessible(true);
+      return (T) newInstance.invoke(null, clazz, Object.class);
+    } catch (Exception ignored) {}
+    // try dalvikvm, post-gingerbread
+    try {
+      Method getConstructorId = ObjectStreamClass.class.getDeclaredMethod(
+          "getConstructorId", Class.class);
+      getConstructorId.setAccessible(true);
+      final int constructorId = (Integer) getConstructorId.invoke(null, Object.class);
+      final Method newInstance = ObjectStreamClass.class.getDeclaredMethod(
+          "newInstance", Class.class, int.class);
+      newInstance.setAccessible(true);
+      return (T) newInstance.invoke(null, clazz, constructorId);
+    } catch (Exception ignored) {}
+    throw new IllegalStateException("unsafe create instance failed");
   }
 }
