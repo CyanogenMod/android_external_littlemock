@@ -103,7 +103,7 @@ public class AppDataDirGuesser {
       File dataDir = new File("/data/data/" + packageName);
       if (isWriteableDirectory(dataDir)) {
         File cacheDir = new File(dataDir, "cache");
-        if ((cacheDir.exists()) || (cacheDir.mkdir())) {
+        if (fileOrDirExists(cacheDir) || makeDirectory(cacheDir)) {
           if (isWriteableDirectory(cacheDir)) {
             results.add(cacheDir);
           }
@@ -111,6 +111,16 @@ public class AppDataDirGuesser {
       }
     }
     return results.toArray(new File[results.size()]);
+  }
+
+  // @VisibleForTesting
+  boolean fileOrDirExists(File file) {
+      return file.exists();
+  }
+
+  // @VisibleForTesting
+  boolean makeDirectory(File file) {
+      return file.mkdir();
   }
 
   // @VisibleForTesting
