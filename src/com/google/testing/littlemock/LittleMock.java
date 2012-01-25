@@ -273,7 +273,7 @@ public class LittleMock {
     return addMatcher(new ArgumentMatcher() {
       @Override
       public boolean matches(Object value) {
-        return (expected == null) ? (value == null) : expected.equals(value);
+        return areEqual(expected, value);
       }
     }, expected);
   }
@@ -477,6 +477,20 @@ public class LittleMock {
     }
   }
 
+  private static boolean areMethodsSame(Method first, Method second) {
+    return areEqual(first.getDeclaringClass(), second.getDeclaringClass()) &&
+        areEqual(first.getName(), second.getName()) &&
+        areEqual(first.getReturnType(), second.getReturnType()) &&
+        Arrays.equals(first.getParameterTypes(), second.getParameterTypes());
+  }
+
+  private static boolean areEqual(Object a, Object b) {
+    if (a == null) {
+      return b == null;
+    }
+    return a.equals(b);
+  }
+
   /**
    * Magically handles the invoking of method calls.
    *
@@ -639,9 +653,9 @@ public class LittleMock {
      * @param operation the name of the operation, used for generating a helpful message
      */
     private void checkSpecialObjectMethods(Method method, String operation) {
-      if (method.equals(sEqualsMethod)
-          || method.equals(sHashCodeMethod)
-          || method.equals(sToStringMethod)) {
+      if (areMethodsSame(method, sEqualsMethod)
+          || areMethodsSame(method, sHashCodeMethod)
+          || areMethodsSame(method, sToStringMethod)) {
         fail("cannot " + operation + " call to " + method);
       }
     }
@@ -655,19 +669,19 @@ public class LittleMock {
 
     private Object innerRecord(Method method, final Object[] args,
             MethodCall methodCall, Object proxy, StackTraceElement callSite) throws Throwable {
-      if (method.equals(sEqualsMethod)) {
+      if (areMethodsSame(method, sEqualsMethod)) {
         // Use identify for equality, the default behavior on object.
         return proxy == args[0];
-      } else if (method.equals(sHashCodeMethod)) {
+      } else if (areMethodsSame(method, sHashCodeMethod)) {
         // This depends on the fact that each mock has its own DefaultInvocationHandler.
         return hashCode();
-      } else if (method.equals(sToStringMethod)) {
+      } else if (areMethodsSame(method, sToStringMethod)) {
         // This is used to identify this is a mock, e.g., in error messages.
         return "Mock<" + mClazz.getName() + ">";
       }
       mRecordedCalls.add(methodCall);
       for (StubbedCall stubbedCall : mStubbedCalls) {
-        if (stubbedCall.mMethodCall.mMethod.equals(methodCall.mMethod)) {
+        if (areMethodsSame(stubbedCall.mMethodCall.mMethod, methodCall.mMethod)) {
           if (stubbedCall.mMethodCall.argsMatch(methodCall.mArgs)) {
             methodCall.mWasVerified = true;
             return stubbedCall.mAction.doAction(method, args);
@@ -772,7 +786,7 @@ public class LittleMock {
         MethodCall methodCall) {
       int total = 0;
       for (MethodCall call : mRecordedCalls) {
-        if (call.mMethod.equals(method)) {
+        if (areMethodsSame(call.mMethod, method)) {
           if ((matchers.length > 0 && doMatchersMatch(matchers, call.mArgs)) ||
               call.argsMatch(methodCall.mArgs)) {
             setCaptures(matchers, call.mArgs);
