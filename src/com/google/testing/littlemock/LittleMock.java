@@ -898,7 +898,7 @@ public class LittleMock {
   }
 
   /** Represents something capable of testing if it matches an argument or not. */
-  /*package*/ interface ArgumentMatcher {
+  public interface ArgumentMatcher {
     public boolean matches(Object value);
   }
 
@@ -978,6 +978,12 @@ public class LittleMock {
   private static <T> T addMatcher(ArgumentMatcher argument, T value) {
     sMatchArguments.add(argument);
     return value;
+  }
+
+  /** A custom argument matcher, should be used only for object arguments not primitives. */
+  public static <T> T matches(ArgumentMatcher argument) {
+    sMatchArguments.add(argument);
+    return null;
   }
 
   /** Utility method to throw an AssertionError if an assertion fails. */

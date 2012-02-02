@@ -39,6 +39,7 @@ import static com.google.testing.littlemock.LittleMock.doThrow;
 import static com.google.testing.littlemock.LittleMock.eq;
 import static com.google.testing.littlemock.LittleMock.initMocks;
 import static com.google.testing.littlemock.LittleMock.isA;
+import static com.google.testing.littlemock.LittleMock.matches;
 import static com.google.testing.littlemock.LittleMock.mock;
 import static com.google.testing.littlemock.LittleMock.never;
 import static com.google.testing.littlemock.LittleMock.reset;
@@ -47,6 +48,8 @@ import static com.google.testing.littlemock.LittleMock.times;
 import static com.google.testing.littlemock.LittleMock.verify;
 import static com.google.testing.littlemock.LittleMock.verifyNoMoreInteractions;
 import static com.google.testing.littlemock.LittleMock.verifyZeroInteractions;
+
+import com.google.testing.littlemock.LittleMock.ArgumentMatcher;
 
 import junit.framework.TestCase;
 
@@ -1411,6 +1414,20 @@ public class LittleMockTest extends TestCase {
       doReturn(null).when(mFoo).aBar();
       fail();
     } catch (IllegalStateException expected) {}
+  }
+
+  public void testCustomMatcher() {
+    ArgumentMatcher argumentMatcher = new ArgumentMatcher() {
+      @Override
+      public boolean matches(Object value) {
+        return ((String) value).contains("[]");
+      }
+    };
+    mFoo.add("as[]df");
+    mFoo.add("qwer[]asdf");
+    mFoo.add("1234");
+    verify(mFoo, times(3)).add(anyString());
+    verify(mFoo, times(2)).add((String) matches(argumentMatcher));
   }
 
   public static class Jim {
