@@ -37,6 +37,7 @@ import static com.google.testing.littlemock.LittleMock.doNothing;
 import static com.google.testing.littlemock.LittleMock.doReturn;
 import static com.google.testing.littlemock.LittleMock.doThrow;
 import static com.google.testing.littlemock.LittleMock.eq;
+import static com.google.testing.littlemock.LittleMock.inOrder;
 import static com.google.testing.littlemock.LittleMock.initMocks;
 import static com.google.testing.littlemock.LittleMock.isA;
 import static com.google.testing.littlemock.LittleMock.matches;
@@ -50,6 +51,7 @@ import static com.google.testing.littlemock.LittleMock.verifyNoMoreInteractions;
 import static com.google.testing.littlemock.LittleMock.verifyZeroInteractions;
 
 import com.google.testing.littlemock.LittleMock.ArgumentMatcher;
+import com.google.testing.littlemock.LittleMock.InOrder;
 
 import junit.framework.TestCase;
 
@@ -1428,6 +1430,124 @@ public class LittleMockTest extends TestCase {
     mFoo.add("1234");
     verify(mFoo, times(3)).add(anyString());
     verify(mFoo, times(2)).add((String) matches(argumentMatcher));
+  }
+
+  public void testInorderExample_Success() {
+    @SuppressWarnings("unchecked")
+    List<String> firstMock = mock(List.class);
+    @SuppressWarnings("unchecked")
+    List<String> secondMock = mock(List.class);
+    firstMock.add("was called first");
+    secondMock.add("was called second");
+    InOrder inOrder = inOrder(firstMock, secondMock);
+    inOrder.verify(firstMock).add("was called first");
+    inOrder.verify(secondMock).add("was called second");
+  }
+
+  public void testInorderExample_Failure() {
+    @SuppressWarnings("unchecked")
+    List<String> firstMock = mock(List.class);
+    @SuppressWarnings("unchecked")
+    List<String> secondMock = mock(List.class);
+    firstMock.add("was called first");
+    secondMock.add("was called second");
+    InOrder inOrder = inOrder(firstMock, secondMock);
+    inOrder.verify(secondMock).add("was called second");
+    try {
+      inOrder.verify(firstMock).add("was called first");
+      throw new IllegalStateException();
+    } catch (AssertionError expected) {}
+  }
+
+  public void testInorderInterleave() {
+    @SuppressWarnings("unchecked")
+    List<String> firstMock = mock(List.class);
+    firstMock.add("a");
+    firstMock.add("b");
+    firstMock.add("a");
+
+    // Should be fine to verify a then b, since they happened in that order.
+    InOrder inOrder = inOrder(firstMock);
+    inOrder.verify(firstMock).add("a");
+    inOrder.verify(firstMock).add("b");
+
+    // Should also be fine to inorder verify the other way around, they happened in that order too.
+    inOrder = inOrder(firstMock);
+    inOrder.verify(firstMock).add("b");
+    inOrder.verify(firstMock).add("a");
+
+    // Should be fine to verify "a, b, a" since that too happened.
+    inOrder = inOrder(firstMock);
+    inOrder.verify(firstMock).add("a");
+    inOrder.verify(firstMock).add("b");
+    inOrder.verify(firstMock).add("a");
+
+    // "a, a, b" did not happen.
+    inOrder = inOrder(firstMock);
+    inOrder.verify(firstMock).add("a");
+    inOrder.verify(firstMock).add("a");
+    try {
+      inOrder.verify(firstMock).add("b");
+      throw new IllegalStateException();
+    } catch (AssertionError expected) {}
+
+    // "b, a, b" did not happen.
+    inOrder = inOrder(firstMock);
+    inOrder.verify(firstMock).add("b");
+    inOrder.verify(firstMock).add("a");
+    try {
+      inOrder.verify(firstMock).add("b");
+      throw new IllegalStateException();
+    } catch (AssertionError expected) {}
+
+    // "b" did not happen twice.
+    inOrder = inOrder(firstMock);
+    inOrder.verify(firstMock).add("b");
+    try {
+      inOrder.verify(firstMock).add("b");
+      throw new IllegalStateException();
+    } catch (AssertionError expected) {}
+  }
+
+  public void testInorderComplicatedExample() {
+    // TODO: I'm currently totally ignoring the parameters passed to the inorder method.
+    // I don't understand what the point of them is, anyway.
+    @SuppressWarnings("unchecked")
+    List<String> firstMock = mock(List.class);
+    @SuppressWarnings("unchecked")
+    List<String> secondMock = mock(List.class);
+
+    firstMock.add("1");
+    secondMock.add("2");
+    firstMock.add("3");
+    secondMock.add("4");
+
+    InOrder allInOrder = inOrder(firstMock, secondMock);
+    allInOrder.verify(firstMock).add("1");
+    allInOrder.verify(secondMock).add("2");
+    allInOrder.verify(firstMock).add("3");
+    allInOrder.verify(secondMock).add("4");
+
+    InOrder firstInOrder = inOrder(firstMock, secondMock);
+    firstInOrder.verify(firstMock).add("1");
+    firstInOrder.verify(firstMock).add("3");
+    try {
+      firstInOrder.verify(secondMock).add("2");
+      throw new IllegalStateException();
+    } catch (AssertionError expected) {}
+    firstInOrder.verify(secondMock).add("4");
+
+    InOrder secondInOrder = inOrder(firstMock, secondMock);
+    secondInOrder.verify(secondMock).add("2");
+    secondInOrder.verify(secondMock).add("4");
+    try {
+      secondInOrder.verify(firstMock).add("1");
+      throw new IllegalStateException();
+    } catch (AssertionError expected) {}
+    try {
+      secondInOrder.verify(firstMock).add("3");
+      throw new IllegalStateException();
+    } catch (AssertionError expected) {}
   }
 
   public static class Jim {

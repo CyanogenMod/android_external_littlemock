@@ -30,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.concurrent.Callable;
 import java.util.concurrent.CopyOnWriteArrayList;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 
 /**
@@ -146,14 +147,48 @@ public class LittleMock {
 
   /** Begins a verification step on a mock: the next method invocation on that mock will verify. */
   public static <T> T verify(T mock, CallCount howManyTimes) {
+    return verify(mock, howManyTimes, null);
+  }
+
+  private static final class OrderChecker {
+    private MethodCall mLastCall;
+
+    public void checkOrder(List<MethodCall> calls, String fieldName) {
+      MethodCall lastTrial = null;
+      for (MethodCall trial : calls) {
+        if (mLastCall == null || mLastCall.mInvocationOrder < trial.mInvocationOrder) {
+          mLastCall = trial;
+          return;
+        }
+        lastTrial = trial;
+      }
+      fail(formatFailedVerifyOrderMessage(mLastCall, lastTrial, fieldName));
+    }
+
+    private String formatFailedVerifyOrderMessage(MethodCall lastCall, MethodCall thisCall,
+        String fieldName) {
+      StringBuffer sb = new StringBuffer();
+      sb.append("\nCall to:");
+      appendDebugStringForMethodCall(sb, thisCall.mMethod, thisCall.mElement, fieldName, false);
+      sb.append("\nShould have happened after:");
+      appendDebugStringForMethodCall(sb, lastCall.mMethod, lastCall.mElement, fieldName, false);
+      sb.append("\nBut the calls happened in the wrong order");
+      sb.append("\n");
+      return sb.toString();
+    }
+  }
+
+  private static <T> T verify(T mock, CallCount howManyTimes, OrderChecker orderCounter) {
     if (howManyTimes == null) {
       throw new IllegalArgumentException("Can't pass null for howManyTimes parameter");
     }
     DefaultInvocationHandler handler = getHandlerFrom(mock);
     checkState(handler.mHowManyTimes == null, "Unfinished verify() statements");
+    checkState(handler.mOrderCounter == null, "Unfinished verify() statements");
     checkState(handler.mStubbingAction == null, "Unfinished stubbing statements");
     checkNoMatchers();
     handler.mHowManyTimes = howManyTimes;
+    handler.mOrderCounter = orderCounter;
     sUnfinishedCallCounts.add(howManyTimes);
     return handler.<T>getVerifyingMock();
   }
@@ -422,6 +457,7 @@ public class LittleMock {
     public <T> T when(T mock) {
       DefaultInvocationHandler handler = getHandlerFrom(mock);
       checkState(handler.mHowManyTimes == null, "Unfinished verify() statements");
+      checkState(handler.mOrderCounter == null, "Unfinished verify() statements");
       checkState(handler.mStubbingAction == null, "Unfinished stubbing statements");
       handler.mStubbingAction = mAction;
       sUnfinishedStubbingActions.add(mAction);
@@ -450,12 +486,17 @@ public class LittleMock {
    */
   private static final List<ArgumentMatcher> sMatchArguments = new ArrayList<ArgumentMatcher>();
 
+  /** Global invocation order of every mock method call. */
+  private static final AtomicLong sGlobalInvocationOrder = new AtomicLong();
+
   /** Encapsulates a single call of a method with associated arguments. */
   private static class MethodCall {
     /** The method call. */
     private final Method mMethod;
     /** The arguments provided at the time the call happened. */
     private final Object[] mArgs;
+    /** The order in which this method call was invoked. */
+    private final long mInvocationOrder;
     /** The line from the test that invoked the handler to create this method call. */
     private final StackTraceElement mElement;
     /** Keeps track of method calls that have been verified, for verifyNoMoreInteractions(). */
@@ -465,6 +506,7 @@ public class LittleMock {
       mMethod = method;
       mElement = element;
       mArgs = args;
+      mInvocationOrder = sGlobalInvocationOrder.getAndIncrement();
     }
 
     public boolean argsMatch(Object[] args) {
@@ -537,6 +579,7 @@ public class LittleMock {
      * <p>It is reset to null once the verification has occurred.
      */
     private CallCount mHowManyTimes = null;
+    private OrderChecker mOrderCounter = null;
 
     /**
      * The action to be associated with the stubbed method.
@@ -605,11 +648,12 @@ public class LittleMock {
             ArgumentMatcher[] matchers = checkClearAndGetMatchers(method);
             StackTraceElement callSite = new Exception().getStackTrace()[2];
             MethodCall methodCall = new MethodCall(method, callSite, args);
-            innerVerify(method, matchers, methodCall, proxy, callSite, mHowManyTimes);
+            innerVerify(method, matchers, methodCall, proxy, callSite, mHowManyTimes, mOrderCounter);
             return defaultReturnValue(method.getReturnType());
           } finally {
             sUnfinishedCallCounts.remove(mHowManyTimes);
             mHowManyTimes = null;
+            mOrderCounter = null;
           }
         }
       });
@@ -664,6 +708,7 @@ public class LittleMock {
       mRecordedCalls.clear();
       mStubbedCalls.clear();
       mHowManyTimes = null;
+      mOrderCounter = null;
       mStubbingAction = null;
     }
 
@@ -758,44 +803,47 @@ public class LittleMock {
     }
 
     private void innerVerify(Method method, ArgumentMatcher[] matchers, MethodCall methodCall,
-        Object proxy, StackTraceElement callSite, CallCount callCount) {
+        Object proxy, StackTraceElement callSite, CallCount callCount, OrderChecker orderCounter) {
       checkSpecialObjectMethods(method, "verify");
-      int total = countMatchingInvocations(method, matchers, methodCall);
+      List<MethodCall> calls = countMatchingInvocations(method, matchers, methodCall);
       long callTimeout = callCount.getTimeout();
+      checkState(orderCounter == null || callTimeout == 0, "can't inorder verify with a timeout");
       if (callTimeout > 0) {
         long endTime = System.currentTimeMillis() + callTimeout;
-        while (!callCount.matches(total)) {
+        while (!callCount.matches(calls.size())) {
           try {
             Thread.sleep(1);
           } catch (InterruptedException e) {
             fail("interrupted whilst waiting to verify");
           }
           if (System.currentTimeMillis() > endTime) {
-            fail(formatFailedVerifyMessage(methodCall, total, callTimeout, callCount));
+            fail(formatFailedVerifyMessage(methodCall, calls.size(), callTimeout, callCount));
           }
-          total = countMatchingInvocations(method, matchers, methodCall);
+          calls = countMatchingInvocations(method, matchers, methodCall);
         }
       } else {
-        if (!callCount.matches(total)) {
-          fail(formatFailedVerifyMessage(methodCall, total, 0, callCount));
+        if (orderCounter != null) {
+            orderCounter.checkOrder(calls, mFieldName);
+        } else if (!callCount.matches(calls.size())) {
+          fail(formatFailedVerifyMessage(methodCall, calls.size(), 0, callCount));
         }
       }
     }
 
-    private int countMatchingInvocations(Method method, ArgumentMatcher[] matchers,
+    private List<MethodCall> countMatchingInvocations(Method method, ArgumentMatcher[] matchers,
         MethodCall methodCall) {
-      int total = 0;
+      List<MethodCall> methodCalls = new ArrayList<MethodCall>();
       for (MethodCall call : mRecordedCalls) {
         if (areMethodsSame(call.mMethod, method)) {
           if ((matchers.length > 0 && doMatchersMatch(matchers, call.mArgs)) ||
               call.argsMatch(methodCall.mArgs)) {
             setCaptures(matchers, call.mArgs);
-            ++total;
+            methodCalls.add(call);
             call.mWasVerified  = true;
           }
         }
       }
-      return total;
+      return methodCalls;
     }
 
     private String formatFailedVerifyMessage(MethodCall methodCall, int total, long timeoutMillis,
@@ -1119,5 +1167,32 @@ public class LittleMock {
       return (T) newInstance.invoke(null, clazz, constructorId);
     } catch (Exception ignored) {}
     throw new IllegalStateException("unsafe create instance failed");
+  }
+
+  /** See {@link LittleMock#inOrder(Object[])}. */
+  public interface InOrder {
+      <T> T verify(T mock);
+  }
+
+  /**
+   * Used to verify that invocations happen in a given order.
+   * <p>
+   * Still slight experimental at the moment: you can only verify one method call at a time,
+   * and we ignore the mocks array you pass in as an argument, you may use the returned inorder
+   * to verify all mocks.
+   * <p>
+   * This implementation is simple: the InOrder you get from this call can be used to verify that
+   * a sequence of method calls happened in the order you specify.  Every verify you make with
+   * this InOrder will be compared with every other verify you made, to make sure that all the
+   * original invocations happened in exactly that same order.
+   */
+  public static InOrder inOrder(Object... mocks) {
+    return new InOrder() {
+      private final OrderChecker mChecker = new OrderChecker();
+      @Override
+      public <T> T verify(T mock) {
+        return LittleMock.verify(mock, times(1), mChecker);
+      }
+    };
   }
 }
