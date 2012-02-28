@@ -1099,6 +1099,13 @@ public class LittleMock {
     }
   }
 
+  /** Helper method to throw an IllegalStateException if given condition is not met. */
+  private static void checkState(boolean condition) {
+    if (!condition) {
+      throw new IllegalStateException();
+    }
+  }
+
   /**
    * If the input object is one of our mocks, returns the {@link DefaultInvocationHandler}
    * we constructed it with.  Otherwise fails with {@link IllegalArgumentException}.
@@ -1118,14 +1125,92 @@ public class LittleMock {
         return (DefaultInvocationHandler) invocationHandler;
       }
     } catch (Exception expectedIfNotAProxyBuilderMock) {}
+    try {
+      // Try with javassist.
+      Class<?> proxyObjectClass = Class.forName("javassist.util.proxy.ProxyObject");
+      Method getHandlerMethod = proxyObjectClass.getMethod("getHandler");
+      Object methodHandler = getHandlerMethod.invoke(mock);
+      InvocationHandler invocationHandler = Proxy.getInvocationHandler(methodHandler);
+      Method getOriginalMethod = invocationHandler.getClass().getMethod("$$getOriginal");
+      Object original = getOriginalMethod.invoke(invocationHandler);
+      if (original instanceof DefaultInvocationHandler) {
+        return (DefaultInvocationHandler) original;
+      }
+    } catch (Exception expectedIfNotJavassistProxy) {}
     throw new IllegalArgumentException("not a valid mock: " + mock);
   }
 
   /** Create a dynamic proxy for the given class, delegating to the given invocation handler. */
-  private static Object createProxy(Class<?> clazz, InvocationHandler handler) {
+  private static Object createProxy(Class<?> clazz, final InvocationHandler handler) {
+    // Interfaces are simple.  Just proxy them using java.lang.reflect.Proxy.
     if (clazz.isInterface()) {
       return Proxy.newProxyInstance(getClassLoader(), new Class<?>[] { clazz }, handler);
     }
+    // Try with javassist.
+    try {
+      Class<?> proxyFactoryClass = Class.forName("javassist.util.proxy.ProxyFactory");
+      Object proxyFactory = proxyFactoryClass.newInstance();
+      Method setSuperclassMethod = proxyFactoryClass.getMethod("setSuperclass", Class.class);
+      setSuperclassMethod.invoke(proxyFactory, clazz);
+      Class<?> methodFilterClass = Class.forName("javassist.util.proxy.MethodFilter");
+      InvocationHandler methodFilterHandler = new InvocationHandler() {
+        @Override
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+          checkState(method.getName().equals("isHandled"));
+          checkState(args.length == 1);
+          checkState(args[0] instanceof Method);
+          Method invokedMethod = (Method) args[0];
+          String methodName = invokedMethod.getName();
+          Class<?>[] params = invokedMethod.getParameterTypes();
+          if ("equals".equals(methodName) && params.length == 1
+              && Object.class.equals(params[0])) {
+            return false;
+          }
+          if ("hashCode".equals(methodName) && params.length == 0) {
+              return false;
+          }
+          if ("toString".equals(methodName) && params.length == 0) {
+              return false;
+          }
+          if ("finalize".equals(methodName) && params.length == 0) {
+              return false;
+          }
+          return true;
+        }
+      };
+      Object methodFilter = Proxy.newProxyInstance(getClassLoader(),
+          new Class<?>[] { methodFilterClass }, methodFilterHandler);
+      Method setFilterMethod = proxyFactoryClass.getMethod("setFilter", methodFilterClass);
+      setFilterMethod.invoke(proxyFactory, methodFilter);
+      Method createClassMethod = proxyFactoryClass.getMethod("createClass");
+      Class<?> createdClass = (Class<?>) createClassMethod.invoke(proxyFactory);
+      InvocationHandler methodHandlerHandler = new InvocationHandler() {
+        @SuppressWarnings("unused")
+        public InvocationHandler $$getOriginal() {
+          return handler;
+        }
+        @Override
+        public Object invoke(Object proxy, Method method, Object[] args) throws Throwable {
+          checkState(method.getName().equals("invoke"));
+          checkState(args.length == 4);
+          checkState(args[1] instanceof Method);
+          Method invokedMethod = (Method) args[1];
+          checkState(args[3] instanceof Object[]);
+          return handler.invoke(args[0], invokedMethod, (Object[]) args[3]);
+        }
+      };
+      Class<?> methodHandlerClass = Class.forName("javassist.util.proxy.MethodHandler");
+      Object methodHandler = Proxy.newProxyInstance(getClassLoader(),
+          new Class<?>[] { methodHandlerClass }, methodHandlerHandler);
+      Object proxy = unsafeCreateInstance(createdClass);
+      Class<?> proxyObjectClass = Class.forName("javassist.util.proxy.ProxyObject");
+      Method setHandlerMethod = proxyObjectClass.getMethod("setHandler", methodHandlerClass);
+      setHandlerMethod.invoke(proxy, methodHandler);
+      return proxy;
+    } catch (Exception e) {
+      // Not supported, i.e. javassist missing.  Fall through.
+    }
+    // So, this is a class.  First try using Android's ProxyBuilder from dexmaker.
     try {
       Class<?> proxyBuilder = Class.forName("com.google.dexmaker.stock.ProxyBuilder");
       Method forClassMethod = proxyBuilder.getMethod("forClass", Class.class);
@@ -1148,6 +1233,15 @@ public class LittleMock {
   /** Attempt to construct an instance of the class using hacky methods to avoid calling super. */
   @SuppressWarnings("unchecked")
   private static <T> T unsafeCreateInstance(Class<T> clazz) {
+    // try jvm
+    try {
+      Class<?> unsafeClass = Class.forName("sun.misc.Unsafe");
+      Field f = unsafeClass.getDeclaredField("theUnsafe");
+      f.setAccessible(true);
+      final Object unsafe = f.get(null);
+      final Method allocateInstance = unsafeClass.getMethod("allocateInstance", Class.class);
+      return (T) allocateInstance.invoke(unsafe, clazz);
+    } catch (Exception ignored) {}
     // try dalvikvm, pre-gingerbread
     try {
       final Method newInstance = ObjectInputStream.class.getDeclaredMethod(

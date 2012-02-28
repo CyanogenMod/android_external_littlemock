@@ -1551,15 +1551,18 @@ public class LittleMockTest extends TestCase {
   }
 
   public static class Jim {
-    public void bob() {
+    public int bob() {
       fail();
+      return 3;
     }
   }
 
   // Does not work on JVM, android only.
-  public void suppress_testMockingConcreteClasses() throws Exception {
+  public void testMockingConcreteClasses() throws Exception {
     Jim mock = mock(Jim.class);
-    mock.bob();
+    assertEquals(0, mock.bob());
+    doReturn(8).when(mock).bob();
+    assertEquals(8, mock.bob());
   }
 
   private Future<Void> invokeBarMethodAfterLatchAwait(final CountDownLatch countDownLatch) {
@@ -1575,17 +1578,6 @@ public class LittleMockTest extends TestCase {
 
   // TODO(hugohudson): 5. Every method that throws exceptions could be improved by adding
   // test for the content of the error message.
-
-  // TODO(hugohudson): 5. Add InOrder class, so that we can check that the given methods on
-  // the given mocks happen in the right order.  It will be pretty easy to do.  The syntax
-  // looks like this:
-  // InOrder inOrder = inOrder(firstMock, secondMock);
-  // inOrder.verify(firstMock).firstMethod();
-  // inOrder.verify(secondMock).secondMethod();
-  // This allows us to verify that the calls happened in the desired order.
-  // By far the simplest way to do this is have a static AtomicInteger on the class which
-  // indicates exactly when every method call happened, and then just compare order based on
-  // that.
 
   // TODO(hugohudson): 5. Make the doReturn() method take variable arguments.
   // The syntax is:
