@@ -323,12 +323,27 @@ public class LittleMock {
     return new ArgumentCaptorImpl<T>();
   }
 
+  /**
+   * Create a correctly typed ArgumentCaptor that also works for primitive types.
+   * For example, to capture an int, use
+   * <code>ArgumentCaptor<Integer> c = createCaptor(Integer.class);</code>
+   */
+  public static <T> ArgumentCaptor<T> createCaptor(Class<T> clazz) {
+    return new ArgumentCaptorImpl<T>(clazz);
+  }
+
   /** Implementation of the {@link ArgumentCaptor} interface. */
   private static class ArgumentCaptorImpl<T extends Object> implements ArgumentCaptor<T> {
     private final ArrayList<T> mAllValues = new ArrayList<T>();
     private T mValue;
+    private Class<T> mClass;
 
     private ArgumentCaptorImpl() {
+        mClass = null;
+    }
+
+    private ArgumentCaptorImpl(Class<T> clazz) {
+        mClass = clazz;
     }
 
     public void setValue(T value) {
@@ -348,8 +363,35 @@ public class LittleMock {
 
     @Override
     public T capture() {
+      if (mClass != null) {
+        if (Integer.class.isAssignableFrom(mClass)) {
+          return (T) LittleMock.<Integer>addMatcher(this, 0);
+        }
+        if (Float.class.isAssignableFrom(mClass)) {
+          return (T) LittleMock.<Float>addMatcher(this, 0f);
+        }
+        if (Double.class.isAssignableFrom(mClass)) {
+          return (T) LittleMock.<Double>addMatcher(this, 0.0);
+        }
+        if (Boolean.class.isAssignableFrom(mClass)) {
+          return (T) LittleMock.<Boolean>addMatcher(this, false);
+        }
+        if (Short.class.isAssignableFrom(mClass)) {
+          return (T) LittleMock.<Short>addMatcher(this, (short) 0);
+        }
+        if (Character.class.isAssignableFrom(mClass)) {
+          return (T) LittleMock.<Character>addMatcher(this, '\u0000');
+        }
+        if (Long.class.isAssignableFrom(mClass)) {
+          return (T) LittleMock.<Long>addMatcher(this, 0L);
+        }
+        if (Byte.class.isAssignableFrom(mClass)) {
+          return (T) LittleMock.<Byte>addMatcher(this, (byte) 0);
+        }
+      }
       return LittleMock.<T>addMatcher(this, null);
     }
+
 
     @Override
     public boolean matches(Object value) {
