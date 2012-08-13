@@ -34,4 +34,5 @@ public interface ArgumentCaptor<T extends Object> extends LittleMock.ArgumentMat
 
   /** Use this argument captor to perform the capture. */
   public T capture();
+
 }
