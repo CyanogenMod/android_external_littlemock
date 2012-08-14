@@ -67,6 +67,15 @@ public class AppDataDirGuesserTest extends TestCase {
         .shouldGive("/data/data/com.google.android.voicesearch/cache");
   }
 
+  public void testSplitPathList() {
+    final String[] expected = { "foo", "bar" };
+    assertTrue(Arrays.equals(expected, AppDataDirGuesser.splitPathList("foo:bar")));
+    assertTrue(Arrays.equals(expected,
+              AppDataDirGuesser.splitPathList("dexPath=foo:bar")));
+    assertTrue(Arrays.equals(expected,
+              AppDataDirGuesser.splitPathList("dexPath=foo:bar,bazPath=bar:bar2")));
+  }
+
   private interface TestCondition {
     TestCondition withNonWriteable(String... files);
     void shouldGive(String... files);

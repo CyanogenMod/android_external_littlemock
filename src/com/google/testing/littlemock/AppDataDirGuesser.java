@@ -75,7 +75,7 @@ public class AppDataDirGuesser {
     }
 
     // Parsing toString() method: yuck.  But no other way to get the path.
-    // Strip out the bit between angle brackets, that's our path.
+    // Strip out the bit between square brackets, that's our path.
     String result = classLoader.toString();
     int index = result.lastIndexOf('[');
     result = (index == -1) ? result : result.substring(index + 1);
@@ -86,7 +86,7 @@ public class AppDataDirGuesser {
   // @VisibleForTesting
   File[] guessPath(String input) {
     List<File> results = new ArrayList<File>();
-    for (String potential : input.split(":")) {
+    for (String potential : splitPathList(input)) {
       if (!potential.startsWith("/data/app/")) {
         continue;
       }
@@ -110,7 +110,22 @@ public class AppDataDirGuesser {
         }
       }
     }
+
     return results.toArray(new File[results.size()]);
+  }
+
+  // @VisibleForTesting
+  static String[] splitPathList(String input) {
+    String trimmed = input;
+    if (input.startsWith("dexPath=")) {
+      int start = "dexPath=".length();
+      int end = input.indexOf(',');
+
+      trimmed = (end == -1) ? input.substring(start) :
+          input.substring(start, end);
+    }
+
+    return trimmed.split(":");
   }
 
   // @VisibleForTesting
