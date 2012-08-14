@@ -12,5 +12,6 @@ Has a number of restrictions.
 Can mock concrete classes, requires dexmaker.jar on classpath.
 
 Local Modifications:
-No modifications.
+- Change to AppDataDirGuesser to handle the new class loader toString
+  format introduced in JB.
 
