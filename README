@@ -14,5 +14,4 @@ Can mock concrete classes, requires dexmaker.jar on classpath.
 Local Modifications:
 - Change to AppDataDirGuesser to handle the new class loader toString
   format introduced in JB.
-- bug8297640.patch: update instantiation code to handle change in internal
-  methods
+

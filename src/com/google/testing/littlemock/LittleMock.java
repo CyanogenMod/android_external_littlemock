@@ -1314,17 +1314,6 @@ public class LittleMock {
       newInstance.setAccessible(true);
       return (T) newInstance.invoke(null, clazz, constructorId);
     } catch (Exception ignored) {}
-    // try dalvikvm, with change https://android-review.googlesource.com/#/c/52331/
-    try {
-      Method getConstructorId = ObjectStreamClass.class
-          .getDeclaredMethod("getConstructorId", Class.class);
-      getConstructorId.setAccessible(true);
-      final long constructorId = (Long) getConstructorId.invoke(null, Object.class);
-      final Method newInstance = ObjectStreamClass.class
-          .getDeclaredMethod("newInstance", Class.class, long.class);
-      newInstance.setAccessible(true);
-      return (T) newInstance.invoke(null, clazz, constructorId);
-    } catch (Exception ignored) {}
     throw new IllegalStateException("unsafe create instance failed");
   }
 
